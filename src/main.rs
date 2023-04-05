@@ -16,12 +16,11 @@
 // and that you want to learn Vulkan. This means that for example it won't go into details about
 // what a vertex or a shader is.
 
-mod custom_storage_buffer;
+mod custom_storage_image;
 
-use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
 use vulkano::{
-    buffer::{BufferUsage, CpuAccessibleBuffer, TypedBufferAccess},
+    buffer::BufferUsage,
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
         RenderPassBeginInfo, SubpassContents,
@@ -30,14 +29,13 @@ use vulkano::{
         physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo,
     },
     image::{view::ImageView, ImageAccess, ImageUsage, SwapchainImage},
-    impl_vertex,
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::StandardMemoryAllocator,
     pipeline::{
         graphics::{
             input_assembly::InputAssemblyState,
-            vertex_input::BuffersDefinition,
             viewport::{Viewport, ViewportState},
+            vertex_input::Vertex
         },
         GraphicsPipeline,
     },
@@ -49,15 +47,18 @@ use vulkano::{
     sync::{self, FlushError, GpuFuture},
     VulkanLibrary,
 };
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo};
 use vulkano::command_buffer::CopyImageInfo;
-use vulkano::image::ImageDimensions;
+use vulkano::device::QueueFlags;
+use vulkano::image::ImageCreateFlags;
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage};
 use vulkano_win::VkSurfaceBuild;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
-use crate::custom_storage_buffer::CustomStorageImage;
+use crate::custom_storage_image::CustomStorageImage;
 
 fn main() {
     // The first step of any Vulkan program is to create an instance.
@@ -136,7 +137,7 @@ fn main() {
                     // We select a queue family that supports graphics operations. When drawing to
                     // a window surface, as we do in this example, we also need to check that queues
                     // in this queue family are capable of presenting images to the surface.
-                    q.queue_flags.graphics && p.surface_support(i as u32, &surface).unwrap_or(false)
+                    q.queue_flags.intersects(QueueFlags::GRAPHICS) && p.surface_support(i as u32, &surface).unwrap_or(false)
                 })
                 // The code here searches for the first queue family that is suitable. If none is
                 // found, `None` is returned to `filter_map`, which disqualifies this physical
@@ -246,19 +247,13 @@ fn main() {
                 // use that.
                 image_extent: window.inner_size().into(),
 
-                image_usage: ImageUsage {
-                    color_attachment: true,
-                    // START OF CUSTOM CODE
-                    transfer_src: true,
-                    // END OF CUSTOM CODE
-                    ..ImageUsage::empty()
-                },
+                image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
 
                 // The alpha mode indicates how the alpha value of the final image will behave. For
                 // example, you can choose whether the window will be opaque or transparent.
                 composite_alpha: surface_capabilities
                     .supported_composite_alpha
-                    .iter()
+                    .into_iter()
                     .next()
                     .unwrap(),
 
@@ -274,11 +269,11 @@ fn main() {
     // We use #[repr(C)] here to force rustc to not do anything funky with our data, although for this
     // particular example, it doesn't actually change the in-memory representation.
     #[repr(C)]
-    #[derive(Clone, Copy, Debug, Default, Zeroable, Pod)]
+    #[derive(Vertex, BufferContents)]
     struct Vertex {
+        #[format(R32G32_SFLOAT)]
         position: [f32; 2],
     }
-    impl_vertex!(Vertex, position);
 
     let vertices = [
         Vertex {
@@ -291,13 +286,16 @@ fn main() {
             position: [0.25, -0.1],
         },
     ];
-    let vertex_buffer = CpuAccessibleBuffer::from_iter(
+    let vertex_buffer = Buffer::from_iter(
         &memory_allocator,
-        BufferUsage {
-            vertex_buffer: true,
-            ..BufferUsage::empty()
+        BufferCreateInfo {
+            usage:BufferUsage::VERTEX_BUFFER,
+            ..Default::default()
         },
-        false,
+        AllocationCreateInfo {
+            usage: MemoryUsage::Upload,
+            ..Default::default()
+        },
         vertices,
     )
         .unwrap();
@@ -396,7 +394,7 @@ fn main() {
         // in. The pipeline will only be usable from this particular subpass.
         .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
         // We need to indicate the layout of the vertices.
-        .vertex_input_state(BuffersDefinition::new().vertex::<Vertex>())
+        .vertex_input_state(Vertex::per_vertex())
         // The content of the vertex buffer describes a list of triangles.
         .input_assembly_state(InputAssemblyState::new())
         // A Vulkan shader can in theory contain multiple entry points, so we have to specify
@@ -432,21 +430,20 @@ fn main() {
         StandardCommandBufferAllocator::new(device.clone(), Default::default());
 
     // START OF CUSTOM CODE
-    let work_image = CustomStorageImage::uninitialized(
-        &memory_allocator,
-        ImageDimensions::Dim2d {
-            width: 1280,
-            height: 720,
-            array_layers: 1,
-        },
-        swapchain.image_format(),
-        6,
-        ImageUsage {
-            transfer_dst: true,
-            storage: true,
-            ..ImageUsage::empty()
-        }
-    ).unwrap();
+    let work_images: Vec<Arc<CustomStorageImage>> = (0..swapchain.image_count()).map(|_| {
+        CustomStorageImage::uninitialized(
+            &memory_allocator,
+            [1280,720],
+            swapchain.image_format(),
+            6,
+            ImageUsage::TRANSFER_SRC
+                | ImageUsage::TRANSFER_DST
+                | ImageUsage::SAMPLED
+                | ImageUsage::STORAGE,
+            ImageCreateFlags::empty(),
+        )
+            .unwrap()
+    }).collect();
     // END OF CUSTOM CODE
 
 
@@ -570,7 +567,10 @@ fn main() {
 
                 builder
                     // START OF CUSTOM CODE
-                    .copy_image(CopyImageInfo::images(images[image_index as usize].clone(), work_image.clone())).unwrap()
+                    .copy_image(CopyImageInfo::images(
+                        images[image_index as usize].clone(),
+                        work_images[image_index as usize].clone())
+                    ).unwrap()
                     // END OF CUSTOM CODE
 
                     // Before we can draw, we have to *enter a render pass*.

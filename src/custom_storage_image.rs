@@ -7,10 +7,9 @@
 // notice may not be copied, modified, or distributed except
 // according to those terms.
 
-use std::{
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use vulkano::device::{Device, DeviceOwned};
 use vulkano::format::Format;
 use vulkano::image::sys::{Image, ImageCreateInfo, RawImage};
@@ -25,56 +24,78 @@ use vulkano::memory::allocator::{
 use vulkano::memory::DedicatedAllocation;
 use vulkano::sync::Sharing;
 
-/// Similar to Vulkano's StorageImage but with multi mip-level support
+/// Similar to vulkano's StorageImage but with multi mip-level support
 #[derive(Debug)]
 pub struct CustomStorageImage {
     inner: Arc<Image>,
+
+    // If true, then the image is in the layout `General`. If false, then it
+    // is still `Undefined`.
+    layout_initialized: AtomicBool,
 }
 
 impl CustomStorageImage {
-    /// Builds an uninitialized image.
+    /// Builds an uninitialized storage image.
     ///
-    /// Returns the image
+    /// Returns the uninitialized image
     pub fn uninitialized(
         allocator: &(impl MemoryAllocator + ?Sized),
-        dimensions: ImageDimensions,
+        dimensions: [u32; 2],
         format: Format,
         num_mip_levels: u32,
         usage: ImageUsage,
+        flags: ImageCreateFlags,
     ) -> Result<Arc<CustomStorageImage>, ImageError> {
+        assert!(!flags.intersects(ImageCreateFlags::DISJOINT)); // TODO: adjust the code below to make this safe
+
+        let dimensions = ImageDimensions::Dim2d {
+            width: dimensions[0],
+            height: dimensions[1],
+            array_layers: 1,
+        };
+
         let raw_image = RawImage::new(
             allocator.device().clone(),
             ImageCreateInfo {
-                flags: ImageCreateFlags::empty(),
+                flags,
                 dimensions,
                 format: Some(format),
                 mip_levels: num_mip_levels,
                 usage,
-                sharing: Sharing::Exclusive,
+                sharing: Sharing::Exclusive, // Note: assuming exclusive sharing
                 ..Default::default()
             },
         )?;
         let requirements = raw_image.memory_requirements()[0];
-        let create_info = AllocationCreateInfo {
-            requirements,
-            allocation_type: AllocationType::NonLinear,
-            usage: MemoryUsage::GpuOnly,
-            allocate_preference: MemoryAllocatePreference::Unknown,
-            dedicated_allocation: Some(DedicatedAllocation::Image(&raw_image)),
-            ..Default::default()
+        let res = unsafe {
+            allocator.allocate_unchecked(
+                requirements,
+                AllocationType::NonLinear,
+                AllocationCreateInfo {
+                    usage: MemoryUsage::DeviceOnly,
+                    allocate_preference: MemoryAllocatePreference::Unknown,
+                    ..Default::default()
+                },
+                Some(DedicatedAllocation::Image(&raw_image)),
+            )
         };
 
-        match unsafe { allocator.allocate_unchecked(create_info) } {
+        match res {
             Ok(alloc) => {
-                debug_assert!(alloc.offset() % requirements.alignment == 0);
-                debug_assert!(alloc.size() == requirements.size);
-                let inner = Arc::new(unsafe {
-                    raw_image
-                        .bind_memory_unchecked([alloc])
-                        .map_err(|(err, _, _)| err)?
-                });
+                debug_assert!(
+                    alloc.offset() & (requirements.layout.alignment().as_devicesize() - 1) == 0
+                );
+                debug_assert!(alloc.size() == requirements.layout.size());
 
-                let image = Arc::new(CustomStorageImage { inner });
+                let inner = Arc::new(
+                    unsafe { raw_image.bind_memory_unchecked([alloc]) }
+                        .map_err(|(err, _, _)| err)?,
+                );
+
+                let image = Arc::new(CustomStorageImage {
+                    inner,
+                    layout_initialized: AtomicBool::new(false),
+                });
 
                 Ok(image)
             }
@@ -100,6 +121,16 @@ unsafe impl ImageAccess for CustomStorageImage {
             first_mipmap_level: 0,
             num_mipmap_levels: self.inner.mip_levels(),
         }
+    }
+
+    #[inline]
+    unsafe fn layout_initialized(&self) {
+        self.layout_initialized.store(true, Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn is_layout_initialized(&self) -> bool {
+        self.layout_initialized.load(Ordering::Relaxed)
     }
 
     #[inline]
