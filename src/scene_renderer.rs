@@ -180,7 +180,10 @@ fn create_output_images(
                     &memory_allocator,
                     dimension,
                     format,
-                    ImageUsage::SAMPLED | ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
+                    ImageUsage::SAMPLED
+                        | ImageUsage::COLOR_ATTACHMENT
+                        | ImageUsage::TRANSFER_SRC
+                        | ImageUsage::STORAGE,
                 )
                 .unwrap(),
             )

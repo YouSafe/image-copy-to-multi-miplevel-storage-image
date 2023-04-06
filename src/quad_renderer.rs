@@ -11,7 +11,7 @@ use vulkano::descriptor_set::layout::DescriptorSetLayout;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::format::Format;
 use vulkano::image::view::ImageView;
-use vulkano::image::{AttachmentImage, SwapchainImage};
+use vulkano::image::{AttachmentImage, StorageImage, SwapchainImage};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator};
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::vertex_input::Vertex;
@@ -39,7 +39,7 @@ pub struct QuadRenderer {
 impl QuadRenderer {
     pub fn new(
         context: &Context,
-        input_images: &[Arc<ImageView<AttachmentImage>>],
+        input_images: &[Arc<ImageView<StorageImage>>],
         output_images: &[Arc<ImageView<SwapchainImage>>],
         final_output_format: Format,
         memory_allocator: Arc<StandardMemoryAllocator>,
@@ -147,7 +147,7 @@ impl QuadRenderer {
 
     pub fn resize(
         &mut self,
-        input_images: &[Arc<ImageView<AttachmentImage>>],
+        input_images: &[Arc<ImageView<StorageImage>>],
         output_images: &[Arc<ImageView<SwapchainImage>>],
     ) {
         let set_layout = self.pipeline.layout().set_layouts().get(0).unwrap();
@@ -216,7 +216,7 @@ impl QuadRenderer {
 
 fn create_descriptor_sets(
     set_layout: &Arc<DescriptorSetLayout>,
-    input_images: &[Arc<ImageView<AttachmentImage>>],
+    input_images: &[Arc<ImageView<StorageImage>>],
     sampler: Arc<Sampler>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
 ) -> Vec<Arc<PersistentDescriptorSet>> {
