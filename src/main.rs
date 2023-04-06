@@ -1,11 +1,11 @@
+mod bloom_renderer;
 mod context;
 mod custom_storage_image;
-mod postfx_renderer;
 mod quad_renderer;
 mod scene_renderer;
 
+use crate::bloom_renderer::BloomRenderer;
 use crate::context::Context;
-use crate::postfx_renderer::PostFXRenderer;
 use crate::quad_renderer::QuadRenderer;
 use crate::scene_renderer::SceneRenderer;
 use std::sync::Arc;
@@ -114,7 +114,7 @@ fn main() {
         command_buffer_allocator.clone(),
     );
 
-    let mut postfx_renderer = PostFXRenderer::new(
+    let mut bloom_renderer = BloomRenderer::new(
         &context,
         scene_renderer.output_images().clone(),
         memory_allocator.clone(),
@@ -124,7 +124,7 @@ fn main() {
 
     let mut quad_renderer = QuadRenderer::new(
         &context,
-        postfx_renderer.output_images(),
+        bloom_renderer.output_images(),
         &swapchain_image_views,
         swapchain.image_format(),
         memory_allocator.clone(),
@@ -185,9 +185,9 @@ fn main() {
 
                     swapchain = new_swapchain;
                     scene_renderer.resize(swapchain.image_count(), swapchain.image_extent());
-                    postfx_renderer.resize(scene_renderer.output_images().clone(), queue.clone());
+                    bloom_renderer.resize(scene_renderer.output_images().clone());
                     quad_renderer
-                        .resize(postfx_renderer.output_images(), &new_swapchain_image_views);
+                        .resize(bloom_renderer.output_images(), &new_swapchain_image_views);
 
                     recreate_swapchain = false;
                 }
@@ -212,7 +212,7 @@ fn main() {
                 let future = previous_frame_end.take().unwrap().join(acquire_future);
 
                 let future = scene_renderer.render(&context, future, image_index, &viewport);
-                let future = postfx_renderer.compute(&context, future, image_index);
+                let future = bloom_renderer.compute(&context, future, image_index);
                 let future = quad_renderer.render(&context, future, image_index, &viewport);
 
                 let future = future
