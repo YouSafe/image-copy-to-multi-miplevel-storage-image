@@ -25,7 +25,9 @@ void main() {
     vec3 e = textureLod(inputImage, uv, float(pass.mipLevel)).rgb;
 
     vec3 downsample = e;
-    downsample = vec3(1.0);
+
+    // this should change the result image to be more green
+    downsample = vec3(0.0,1.0,0.0);
 
     imageStore(outputImage, texel_output, vec4(downsample, 1.0));
 }
