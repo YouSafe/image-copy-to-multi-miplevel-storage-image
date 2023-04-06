@@ -1,10 +1,16 @@
 mod context;
 mod custom_storage_image;
+mod quad_renderer;
 mod scene_renderer;
 
 use crate::context::Context;
+use crate::quad_renderer::QuadRenderer;
 use crate::scene_renderer::SceneRenderer;
 use std::sync::Arc;
+use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
+use vulkano::format::Format;
+use vulkano::image::view::ImageView;
+use vulkano::image::SwapchainImage;
 use vulkano::{
     command_buffer::allocator::StandardCommandBufferAllocator,
     image::{ImageAccess, ImageUsage},
@@ -75,12 +81,19 @@ fn main() {
         .unwrap()
     };
 
+    let swapchain_image_views: Vec<Arc<ImageView<SwapchainImage>>> = images
+        .iter()
+        .map(|image| ImageView::new_default(image.clone()).unwrap())
+        .collect();
+
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
 
     let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
         device.clone(),
         Default::default(),
     ));
+
+    let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(context.device()));
 
     // Dynamic viewports allow us to recreate just the viewport when the window is resized
     // Otherwise we would have to recreate the whole pipeline.
@@ -92,10 +105,21 @@ fn main() {
 
     let mut scene_renderer = SceneRenderer::new(
         &context,
-        &images,
+        swapchain.image_count(),
+        swapchain.image_extent(),
+        Format::R16G16B16A16_SFLOAT,
+        memory_allocator.clone(),
+        command_buffer_allocator.clone(),
+    );
+
+    let mut quad_renderer = QuadRenderer::new(
+        &context,
+        scene_renderer.output_images(),
+        &swapchain_image_views,
         swapchain.image_format(),
         memory_allocator.clone(),
         command_buffer_allocator.clone(),
+        descriptor_set_allocator.clone(),
     );
 
     let mut recreate_swapchain = false;
@@ -144,8 +168,15 @@ fn main() {
                     let dimensions = new_images[0].dimensions().width_height();
                     viewport.dimensions = [dimensions[0] as f32, dimensions[1] as f32];
 
+                    let new_swapchain_image_views: Vec<Arc<ImageView<SwapchainImage>>> = new_images
+                        .iter()
+                        .map(|image| ImageView::new_default(image.clone()).unwrap())
+                        .collect();
+
                     swapchain = new_swapchain;
-                    scene_renderer.resize(&new_images);
+                    scene_renderer.resize(swapchain.image_count(), swapchain.image_extent());
+                    quad_renderer
+                        .resize(scene_renderer.output_images(), &new_swapchain_image_views);
 
                     recreate_swapchain = false;
                 }
@@ -170,6 +201,8 @@ fn main() {
                 let future = previous_frame_end.take().unwrap().join(acquire_future);
 
                 let future = scene_renderer.render(&context, future, image_index, &viewport);
+
+                let future = quad_renderer.render(&context, future, image_index, &viewport);
 
                 let future = future
                     .then_swapchain_present(
