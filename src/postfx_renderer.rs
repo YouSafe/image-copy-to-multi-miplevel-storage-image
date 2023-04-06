@@ -1,4 +1,5 @@
 use crate::context::Context;
+use crate::custom_storage_image::CustomStorageImage;
 use std::sync::Arc;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
@@ -8,7 +9,9 @@ use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::Queue;
 use vulkano::image::view::ImageView;
-use vulkano::image::{AttachmentImage, ImageAccess, ImageUsage, ImageViewAbstract, StorageImage};
+use vulkano::image::{
+    AttachmentImage, ImageAccess, ImageCreateFlags, ImageUsage, ImageViewAbstract, StorageImage,
+};
 use vulkano::memory::allocator::StandardMemoryAllocator;
 use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint};
 use vulkano::sync::GpuFuture;
@@ -17,7 +20,7 @@ pub struct PostFXRenderer {
     pipeline: Arc<ComputePipeline>,
 
     input_images: Vec<Arc<ImageView<AttachmentImage>>>,
-    output_images: Vec<Arc<ImageView<StorageImage>>>,
+    output_images: Vec<Arc<ImageView<CustomStorageImage>>>,
 
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
@@ -128,7 +131,7 @@ impl PostFXRenderer {
             .unwrap()
     }
 
-    pub fn output_images(&self) -> &Vec<Arc<ImageView<StorageImage>>> {
+    pub fn output_images(&self) -> &Vec<Arc<ImageView<CustomStorageImage>>> {
         &self.output_images
     }
 }
@@ -137,18 +140,21 @@ fn create_output_images(
     input_images: Vec<Arc<ImageView<AttachmentImage>>>,
     queue: Arc<Queue>,
     memory_allocator: Arc<StandardMemoryAllocator>,
-) -> Vec<Arc<ImageView<StorageImage>>> {
+) -> Vec<Arc<ImageView<CustomStorageImage>>> {
     input_images
         .iter()
         .map(|image| {
-            StorageImage::general_purpose_image_view(
+            let image = CustomStorageImage::uninitialized(
                 &memory_allocator,
-                queue.clone(),
                 image.dimensions().width_height(),
                 image.image().format(),
+                6,
                 ImageUsage::TRANSFER_DST | ImageUsage::STORAGE | ImageUsage::SAMPLED,
+                ImageCreateFlags::empty(),
             )
-            .unwrap()
+            .unwrap();
+
+            ImageView::new_default(image).unwrap()
         })
         .collect()
 }
