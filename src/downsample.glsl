@@ -15,7 +15,7 @@ layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D outputImage;
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 vec3 textureSample(vec2 uv, vec2 offset) {
-    return textureLod(inputImage, uv + offset * pass.texelSize, float(pass.mipLevel)).rgb;
+    return textureLod(inputImage, uv + offset * pass.texelSize, float(0)).rgb;
 }
 
 void main() {
