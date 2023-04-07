@@ -111,8 +111,8 @@ impl QuadRenderer {
         let sampler = Sampler::new(
             context.device(),
             SamplerCreateInfo {
-                mag_filter: Filter::Nearest,
-                min_filter: Filter::Nearest,
+                mag_filter: Filter::Linear,
+                min_filter: Filter::Linear,
                 address_mode: [SamplerAddressMode::Repeat; 3],
                 mipmap_mode: SamplerMipmapMode::Nearest,
                 ..SamplerCreateInfo::default()
@@ -193,6 +193,14 @@ impl QuadRenderer {
                 SubpassContents::Inline,
             )
             .unwrap()
+            .push_constants(
+                self.pipeline.layout().clone(),
+                0,
+                fs::Data {
+                    gamma: 2.2,
+                    exposure: 1.0,
+                },
+            )
             .bind_pipeline_graphics(self.pipeline.clone())
             .bind_descriptor_sets(
                 PipelineBindPoint::Graphics,
@@ -323,10 +331,20 @@ mod fs {
 
             layout(location = 0) out vec4 f_color;
 
+            layout(push_constant) uniform Data {
+                float exposure;
+                float gamma;
+            } data;
+
             layout(set = 0, binding = 0) uniform sampler2D image;
 
             void main() {
-                f_color = texture(image, v_uv);
+                vec3 hdrColor = data.exposure * texture(image, v_uv).rgb; 
+
+                // reinhard tone mapping
+                vec3 color = hdrColor / (hdrColor + vec3(1.0));
+
+                f_color = vec4(color, 1.0);
             }
         "
     }

@@ -54,6 +54,9 @@ void main() {
 
     // blend color additively with previous color
     upsample += imageLoad(outputImage, texel_output).rgb;
+    if (pass.mipLevel == 2) {
+        upsample = vec3(1.0, 0.0, 0.0);
+    }
 
     imageStore(outputImage, texel_output, vec4(upsample, 1.0));
 }

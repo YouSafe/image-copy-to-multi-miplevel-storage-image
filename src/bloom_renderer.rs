@@ -102,7 +102,7 @@ impl BloomRenderer {
     pub fn compute<F>(
         &self,
         context: &Context,
-        future: F,
+        mut future: F,
         swapchain_frame_index: u32,
     ) -> CommandBufferExecFuture<F>
     where
@@ -114,6 +114,8 @@ impl BloomRenderer {
             CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
+
+        let mut return_future: CommandBufferExecFuture<dyn GpuFuture>;
 
         let scene_image = self.input_images[swapchain_frame_index as usize]
             .image()
@@ -184,7 +186,7 @@ impl BloomRenderer {
 
             let downsample_pass = cs::downsample::Pass {
                 mipLevel: Padded::from(input_miplevel as i32),
-                texelSize: input_size.width_height().map(|v| 1.0 / v as f32).into(),
+                texelSize: input_size.width_height().map(|v| 1.0 / (v as f32)).into(),
             };
 
             builder
@@ -203,6 +205,12 @@ impl BloomRenderer {
                 .unwrap();
         }
 
+        let command_buffer = builder.build().unwrap();
+
+        return_future = future
+            .then_execute(context.queue(), command_buffer)
+            .unwrap();
+
         // upsample passes
 
         builder.bind_pipeline_compute(self.upsample_pipeline.clone());
@@ -215,6 +223,13 @@ impl BloomRenderer {
             .unwrap();
 
         for i in (0..(work_image.mip_levels() - 1)).rev() {
+            let mut builder = AutoCommandBufferBuilder::primary(
+                &self.command_buffer_allocator,
+                context.queue().queue_family_index(),
+                CommandBufferUsage::OneTimeSubmit,
+            )
+            .unwrap();
+
             let input_miplevel = i + 1;
             let output_miplevel = i;
 
@@ -256,7 +271,7 @@ impl BloomRenderer {
 
             let upsample_pass = cs::upsample::Pass {
                 mipLevel: Padded::from(input_miplevel as i32),
-                texelSize: input_size.width_height().map(|v| 1.0 / v as f32).into(),
+                texelSize: input_size.width_height().map(|v| 1.0 / (v as f32)).into(),
             };
 
             builder
@@ -269,13 +284,15 @@ impl BloomRenderer {
                 )
                 .dispatch(output_size.width_height_depth())
                 .unwrap();
+
+            let command_buffer = builder.build().unwrap();
+
+            return_future = return_future
+                .then_execute(context.queue(), command_buffer)
+                .unwrap();
         }
 
-        let command_buffer = builder.build().unwrap();
-
-        future
-            .then_execute(context.queue(), command_buffer)
-            .unwrap()
+        return_future
     }
 
     pub fn output_images(&self) -> &Vec<Arc<ImageView<CustomStorageImage>>> {
@@ -312,9 +329,9 @@ fn create_output_images(
                 },
             )
             .unwrap();
-
-            assert_eq!(view.subresource_range().mip_levels.len(), 1);
-            assert!(view.subresource_range().mip_levels.contains(&0));
+            //
+            // assert_eq!(view.subresource_range().mip_levels.len(), 1);
+            // assert!(view.subresource_range().mip_levels.contains(&0));
 
             view
         })

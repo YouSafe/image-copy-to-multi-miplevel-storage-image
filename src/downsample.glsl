@@ -74,5 +74,7 @@ void main() {
         + (b+d+f+h) * 0.0625  // (b+d+f+h) / 2) * 0.125
         + (j+k+l+m) * 0.125;  // (j+k+l+m) * 0.125
 
+    downsample = max(downsample, 0.0001f);
+
     imageStore(outputImage, texel_output, vec4(downsample, 1.0));
 }

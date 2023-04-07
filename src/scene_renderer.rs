@@ -221,13 +221,13 @@ struct SceneVertex {
 const fn triangle_vertices() -> [SceneVertex; 3] {
     [
         SceneVertex {
-            position: [-0.5, -0.25],
+            position: [-0.5, 0.5],
         },
         SceneVertex {
-            position: [0.0, 0.5],
+            position: [0.5, 0.5],
         },
         SceneVertex {
-            position: [0.25, -0.1],
+            position: [0.0, -0.5],
         },
     ]
 }
