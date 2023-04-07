@@ -194,7 +194,6 @@ impl BloomRenderer {
             .unwrap();
 
             let downsample_pass = cs::downsample::Pass {
-                mipLevel: Padded::from(input_miplevel as i32),
                 texelSize: input_size.width_height().map(|v| 1.0 / (v as f32)).into(),
             };
 
@@ -279,7 +278,6 @@ impl BloomRenderer {
             .unwrap();
 
             let upsample_pass = cs::upsample::Pass {
-                mipLevel: Padded::from(input_miplevel as i32),
                 texelSize: input_size.width_height().map(|v| 1.0 / (v as f32)).into(),
             };
 
@@ -335,10 +333,6 @@ fn create_output_images(
                 },
             )
             .unwrap();
-            //
-            // assert_eq!(view.subresource_range().mip_levels.len(), 1);
-            // assert!(view.subresource_range().mip_levels.contains(&0));
-
             view
         })
         .collect()

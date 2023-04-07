@@ -1,8 +1,6 @@
 #version 450
 
 layout(push_constant) uniform Pass {
-    // mip level of the input image
-    int mipLevel;
     // size of one texel in the input image
     vec2 texelSize;
 } pass;
@@ -15,7 +13,7 @@ layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D outputImage;
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 vec3 textureSample(vec2 uv, vec2 offset) {
-    return textureLod(inputImage, uv + offset * pass.texelSize, float(0)).rgb;
+    return textureLod(inputImage, uv + offset * pass.texelSize, 0.0).rgb;
 }
 
 void main() {
@@ -23,7 +21,7 @@ void main() {
     ivec2 texel_input = 2 * texel_output;
 
     // uv coordinates between 0-1
-    vec2 uv = vec2(texel_input) * pass.texelSize;
+    vec2 uv = vec2(texel_input + 0.5) * pass.texelSize;
 
     // Source: https://learnopengl.com/Guest-Articles/2022/Phys.-Based-Bloom
     // Take 13 samples around current texel:
@@ -50,8 +48,6 @@ void main() {
     vec3 k = textureSample(uv, vec2( 1, 1));
     vec3 l = textureSample(uv, vec2(-1,-1));
     vec3 m = textureSample(uv, vec2( 1,-1));
-
-    // code assumes that the coodinate system has its origin in the bottom left corner
 
     // Apply weighted distribution:
     // 0.5 + 0.125 + 0.125 + 0.125 + 0.125 = 1

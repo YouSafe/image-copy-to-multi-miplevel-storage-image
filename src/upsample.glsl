@@ -1,8 +1,6 @@
 #version 450
 
 layout(push_constant) uniform Pass {
-    // mip level of the input image
-    int mipLevel;
     // size of one texel in the input image;
     vec2 texelSize;
 } pass;
@@ -15,14 +13,14 @@ layout(set = 0, binding = 1, rgba16f) uniform image2D outputImage;
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 vec3 textureSample(vec2 uv, vec2 offset) {
-    return textureLod(inputImage, uv + offset * pass.texelSize, float(0)).rgb;
+    return textureLod(inputImage, uv + offset * pass.texelSize, 0.0).rgb;
 }
 
 void main() {
     ivec2 texel_output = ivec2(gl_GlobalInvocationID.xy);
     vec2 texel_input = vec2(texel_output) / 2.0;
 
-    vec2 uv = texel_input * pass.texelSize;
+    vec2 uv = (texel_input + 0.5) * pass.texelSize;
 
     // Source: https://learnopengl.com/Guest-Articles/2022/Phys.-Based-Bloom
     // Take 9 samples around current texel:

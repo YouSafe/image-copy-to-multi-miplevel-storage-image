@@ -13,6 +13,7 @@ use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::format::Format;
 use vulkano::image::view::ImageView;
 use vulkano::image::SwapchainImage;
+use vulkano::swapchain::{ColorSpace, SurfaceInfo};
 use vulkano::{
     command_buffer::allocator::StandardCommandBufferAllocator,
     image::{ImageAccess, ImageUsage},
@@ -58,9 +59,20 @@ fn main() {
         let image_format = Some(
             device
                 .physical_device()
-                .surface_formats(&surface, Default::default())
-                .unwrap()[0]
-                .0,
+                .surface_formats(&surface, SurfaceInfo::default())
+                .expect("could not fetch surface formats")
+                .iter()
+                .min_by_key(|(format, color)| {
+                    // Prefer an UNORM format
+                    match (format, color) {
+                        (Format::B8G8R8A8_UNORM, _) => 0,
+                        (Format::B8G8R8A8_SRGB, _) => 1,
+                        (Format::R8G8B8A8_SRGB, ColorSpace::SrgbNonLinear) => 2,
+                        (_, _) => 3,
+                    }
+                })
+                .expect("could not fetch image format")
+                .0, // just the format
         );
         let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
 
@@ -71,7 +83,7 @@ fn main() {
                 min_image_count: surface_capabilities.min_image_count,
                 image_format,
                 image_extent: window.inner_size().into(),
-                image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
+                image_usage: ImageUsage::COLOR_ATTACHMENT,
                 composite_alpha: surface_capabilities
                     .supported_composite_alpha
                     .into_iter()
