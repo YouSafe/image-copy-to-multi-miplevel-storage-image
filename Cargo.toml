@@ -1,5 +1,5 @@
 [package]
-name = "image-copy-to-multi-miplevel-storage_image"
+name = "bloom-vulkano"
 version = "0.1.0"
 edition = "2021"
 

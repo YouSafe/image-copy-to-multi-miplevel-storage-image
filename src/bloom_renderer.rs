@@ -134,12 +134,25 @@ impl BloomRenderer {
 
         // downsample passes
         builder.bind_pipeline_compute(self.downsample_pipeline.clone());
-        {
-            let downsample_set_layout = self
-                .downsample_pipeline
-                .layout()
-                .set_layouts()
-                .get(0)
+
+        let downsample_set_layout = self
+            .downsample_pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+
+        for i in 0..(work_image.mip_levels() - 1) {
+            let input_miplevel = i;
+            let output_miplevel = i + 1;
+
+            let input_size = work_image
+                .dimensions()
+                .mip_level_dimensions(input_miplevel)
+                .unwrap();
+            let output_size = work_image
+                .dimensions()
+                .mip_level_dimensions(output_miplevel)
                 .unwrap();
 
             let output_image_view = ImageView::new(
@@ -147,7 +160,7 @@ impl BloomRenderer {
                 ImageViewCreateInfo {
                     format: Some(work_image.format()),
                     subresource_range: ImageSubresourceRange {
-                        mip_levels: 1..2,
+                        mip_levels: (output_miplevel)..(output_miplevel + 1), // mip level of output image
                         ..work_image.subresource_range()
                     },
                     ..ImageViewCreateInfo::default()
@@ -170,12 +183,8 @@ impl BloomRenderer {
             .unwrap();
 
             let downsample_pass = cs::downsample::Pass {
-                mipLevel: Padded::from(0),
-                texelSize: work_image
-                    .dimensions()
-                    .width_height()
-                    .map(|v| 1.0 / v as f32)
-                    .into(),
+                mipLevel: Padded::from(input_miplevel as i32),
+                texelSize: input_size.width_height().map(|v| 1.0 / v as f32).into(),
             };
 
             builder
@@ -190,19 +199,32 @@ impl BloomRenderer {
                     0,
                     downsample_descriptor_set.clone(),
                 )
-                .dispatch(work_image.dimensions().width_height_depth().map(|v| v / 2))
+                .dispatch(output_size.width_height_depth())
                 .unwrap();
         }
 
         // upsample passes
 
         builder.bind_pipeline_compute(self.upsample_pipeline.clone());
-        {
-            let upsample_set_layout = self
-                .upsample_pipeline
-                .layout()
-                .set_layouts()
-                .get(0)
+
+        let upsample_set_layout = self
+            .upsample_pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+
+        for i in (0..(work_image.mip_levels() - 1)).rev() {
+            let input_miplevel = i + 1;
+            let output_miplevel = i;
+
+            let input_size = work_image
+                .dimensions()
+                .mip_level_dimensions(input_miplevel)
+                .unwrap();
+            let output_size = work_image
+                .dimensions()
+                .mip_level_dimensions(output_miplevel)
                 .unwrap();
 
             let output_image_view = ImageView::new(
@@ -210,7 +232,7 @@ impl BloomRenderer {
                 ImageViewCreateInfo {
                     format: Some(work_image.format()),
                     subresource_range: ImageSubresourceRange {
-                        mip_levels: 0..1,
+                        mip_levels: (output_miplevel)..(output_miplevel + 1), // mip level of output image
                         ..work_image.subresource_range()
                     },
                     ..ImageViewCreateInfo::default()
@@ -233,12 +255,8 @@ impl BloomRenderer {
             .unwrap();
 
             let upsample_pass = cs::upsample::Pass {
-                mipLevel: Padded::from(1),
-                texelSize: work_image
-                    .dimensions()
-                    .width_height()
-                    .map(|v| 1.0 / v as f32 * 0.5)
-                    .into(),
+                mipLevel: Padded::from(input_miplevel as i32),
+                texelSize: input_size.width_height().map(|v| 1.0 / v as f32).into(),
             };
 
             builder
@@ -249,7 +267,7 @@ impl BloomRenderer {
                     0,
                     upsample_descriptor_set.clone(),
                 )
-                .dispatch(work_image.dimensions().width_height_depth())
+                .dispatch(output_size.width_height_depth())
                 .unwrap();
         }
 
@@ -272,17 +290,33 @@ fn create_output_images(
     input_images
         .iter()
         .map(|image| {
-            let image = CustomStorageImage::uninitialized(
+            let storage_image = CustomStorageImage::uninitialized(
                 &memory_allocator,
                 image.dimensions().width_height(),
                 image.image().format(),
-                2,
+                6,
                 ImageUsage::TRANSFER_DST | ImageUsage::STORAGE | ImageUsage::SAMPLED,
                 ImageCreateFlags::empty(),
             )
             .unwrap();
 
-            ImageView::new_default(image).unwrap()
+            let view = ImageView::new(
+                storage_image.clone(),
+                ImageViewCreateInfo {
+                    format: Some(storage_image.format()),
+                    subresource_range: ImageSubresourceRange {
+                        mip_levels: 0..1,
+                        ..storage_image.subresource_range()
+                    },
+                    ..ImageViewCreateInfo::default()
+                },
+            )
+            .unwrap();
+
+            assert_eq!(view.subresource_range().mip_levels.len(), 1);
+            assert!(view.subresource_range().mip_levels.contains(&0));
+
+            view
         })
         .collect()
 }
