@@ -195,6 +195,10 @@ impl BloomRenderer {
 
             let downsample_pass = cs::downsample::Pass {
                 texelSize: input_size.width_height().map(|v| 1.0 / (v as f32)).into(),
+
+                useThreshold: (input_miplevel == 0) as u32,
+                threshold: 1.5,
+                knee: 0.1,
             };
 
             builder
@@ -279,6 +283,8 @@ impl BloomRenderer {
 
             let upsample_pass = cs::upsample::Pass {
                 texelSize: input_size.width_height().map(|v| 1.0 / (v as f32)).into(),
+
+                intensity: 1.0,
             };
 
             builder

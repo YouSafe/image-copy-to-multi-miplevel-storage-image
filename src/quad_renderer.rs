@@ -375,8 +375,6 @@ mod fs {
                      color = RRTAndODTFit(color);
                      color = ACESOutputMat * color;
             
-                     color = gammaCorrect(color);
-            
                 f_color = vec4(color, 1.0);
             }
         "

@@ -3,6 +3,8 @@
 layout(push_constant) uniform Pass {
     // size of one texel in the input image;
     vec2 texelSize;
+    
+    float intensity;
 } pass;
 
 layout(set = 0, binding = 0) uniform sampler2D inputImage;
@@ -50,6 +52,8 @@ void main() {
         1.0 * (a + c + g + i)
     );
 
+    upsample *= pass.intensity;
+    
     // blend color additively with previous color
     upsample += imageLoad(outputImage, texel_output).rgb;
 

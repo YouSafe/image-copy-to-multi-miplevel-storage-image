@@ -3,6 +3,10 @@
 layout(push_constant) uniform Pass {
     // size of one texel in the input image
     vec2 texelSize;
+
+    bool useThreshold;
+    float threshold;
+    float knee;
 } pass;
 
 layout(set = 0, binding = 0) uniform sampler2D inputImage;
@@ -14,6 +18,22 @@ layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 vec3 textureSample(vec2 uv, vec2 offset) {
     return textureLod(inputImage, uv + offset * pass.texelSize, 0.0).rgb;
+}
+
+// Using the technique from https://catlikecoding.com/unity/tutorials/advanced-rendering/bloom/
+vec3 soft_threshold(vec3 color, float threshold, float knee) {
+    // use color's maximum component to determine brightness
+    float brightness = max(color.r, max(color.g, color.b));
+
+    // softening curve
+    float soft = clamp(brightness - threshold + knee, 0.0, 2.0 * knee);
+    soft = (soft * soft) / (4 * knee + 0.00001);
+
+    // contribution factor of the color
+    float contribution = max(soft, brightness - threshold);
+    contribution /= max(brightness, 0.000001);
+
+    return color * contribution;
 }
 
 void main() {
@@ -71,6 +91,10 @@ void main() {
         + (j+k+l+m) * 0.125;  // (j+k+l+m) * 0.125
 
     downsample = max(downsample, 0.0001f);
+
+    if (pass.useThreshold) {
+        downsample = soft_threshold(downsample, pass.threshold, pass.knee);
+    }
 
     imageStore(outputImage, texel_output, vec4(downsample, 1.0));
 }

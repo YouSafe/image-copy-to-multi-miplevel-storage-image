@@ -63,9 +63,8 @@ fn main() {
                 .expect("could not fetch surface formats")
                 .iter()
                 .min_by_key(|(format, color)| {
-                    // Prefer an UNORM format
+                    // Prefer a srgb format
                     match (format, color) {
-                        (Format::B8G8R8A8_UNORM, _) => 0,
                         (Format::B8G8R8A8_SRGB, _) => 1,
                         (Format::R8G8B8A8_SRGB, ColorSpace::SrgbNonLinear) => 2,
                         (_, _) => 3,
