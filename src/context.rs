@@ -1,13 +1,17 @@
 use std::sync::Arc;
-use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags};
+use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
+use vulkano::device::{
+    Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
+};
+use vulkano::instance::debug::{
+    DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger,
+    DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo,
+};
 use vulkano::instance::{Instance, InstanceCreateInfo, InstanceExtensions};
 use vulkano::swapchain::Surface;
 use vulkano::{Version, VulkanLibrary};
-use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
-use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger, DebugUtilsMessengerCreateInfo};
-use vulkano_win::VkSurfaceBuild;
 use winit::event_loop::EventLoop;
-use winit::window::WindowBuilder;
+use winit::window::Window;
 
 pub struct Context {
     surface: Arc<Surface>,
@@ -18,12 +22,10 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(window_builder: WindowBuilder, event_loop: &EventLoop<()>) -> Context {
-        let (instance, debug_callback) = create_instance();
+    pub fn new(window: Arc<Window>, event_loop: &EventLoop<()>) -> Context {
+        let (instance, debug_callback) = create_instance(event_loop);
 
-        let surface = window_builder
-            .build_vk_surface(&event_loop, instance.clone())
-            .expect("could not create window");
+        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
@@ -65,7 +67,7 @@ impl Context {
     }
 }
 
-fn create_instance() -> (Arc<Instance>, Option<DebugUtilsMessenger>) {
+fn create_instance(event_loop: &EventLoop<()>) -> (Arc<Instance>, Option<DebugUtilsMessenger>) {
     let library = VulkanLibrary::new().expect("no local Vulkan library/DLL");
 
     let supported_extensions = library.supported_extensions();
@@ -78,12 +80,14 @@ fn create_instance() -> (Arc<Instance>, Option<DebugUtilsMessenger>) {
     let debug_extension_name = String::from("VK_LAYER_KHRONOS_validation");
     let debug_enabled = supported_extensions.ext_debug_utils
         && supported_layers
-        .iter()
-        .any(|l| l.name() == debug_extension_name);
+            .iter()
+            .any(|l| l.name() == debug_extension_name);
+
+    let required_extensions = Surface::required_extensions(&event_loop).unwrap();
 
     let instance_extensions = InstanceExtensions {
         ext_debug_utils: debug_enabled,
-        ..vulkano_win::required_extensions(&library)
+        ..required_extensions
     };
 
     let mut layers = vec![];
@@ -100,7 +104,7 @@ fn create_instance() -> (Arc<Instance>, Option<DebugUtilsMessenger>) {
             ..Default::default()
         },
     )
-        .expect("failed to create instance");
+    .expect("failed to create instance");
 
     // the debug callback should stay alive as long as the instance
     // otherwise the callback will be dropped and no longer print any messages
@@ -124,45 +128,50 @@ fn create_debug_callback(instance: Arc<Instance>) -> Option<DebugUtilsMessenger>
                 message_type: DebugUtilsMessageType::GENERAL
                     | DebugUtilsMessageType::VALIDATION
                     | DebugUtilsMessageType::PERFORMANCE,
-                ..DebugUtilsMessengerCreateInfo::user_callback(Arc::new(|msg| {
-                    let severity = if msg.severity.intersects(DebugUtilsMessageSeverity::ERROR) {
-                        "error"
-                    } else if msg.severity.intersects(DebugUtilsMessageSeverity::WARNING) {
-                        "warning"
-                    } else if msg.severity.intersects(DebugUtilsMessageSeverity::INFO) {
-                        "information"
-                    } else if msg.severity.intersects(DebugUtilsMessageSeverity::VERBOSE) {
-                        "verbose"
-                    } else {
-                        panic!("no-impl");
-                    };
+                ..DebugUtilsMessengerCreateInfo::user_callback(DebugUtilsMessengerCallback::new(
+                    |message_severity, message_type, callback_data| {
+                        let severity = if message_severity
+                            .intersects(DebugUtilsMessageSeverity::ERROR)
+                        {
+                            "error"
+                        } else if message_severity.intersects(DebugUtilsMessageSeverity::WARNING) {
+                            "warning"
+                        } else if message_severity.intersects(DebugUtilsMessageSeverity::INFO) {
+                            "information"
+                        } else if message_severity.intersects(DebugUtilsMessageSeverity::VERBOSE) {
+                            "verbose"
+                        } else {
+                            panic!("no-impl");
+                        };
 
-                    let ty = if msg.ty.intersects(DebugUtilsMessageType::GENERAL) {
-                        "general"
-                    } else if msg.ty.intersects(DebugUtilsMessageType::VALIDATION) {
-                        "validation"
-                    } else if msg.ty.intersects(DebugUtilsMessageType::PERFORMANCE) {
-                        "performance"
-                    } else {
-                        panic!("no-impl");
-                    };
+                        let ty = if message_type.intersects(DebugUtilsMessageType::GENERAL) {
+                            "general"
+                        } else if message_type.intersects(DebugUtilsMessageType::VALIDATION) {
+                            "validation"
+                        } else if message_type.intersects(DebugUtilsMessageType::PERFORMANCE) {
+                            "performance"
+                        } else {
+                            panic!("no-impl");
+                        };
 
-                    if msg.severity.intersects(DebugUtilsMessageSeverity::VERBOSE)
-                        || msg.severity.intersects(DebugUtilsMessageSeverity::INFO)
-                    {
-                        return;
-                    }
-                    println!(
-                        "{} {} {}: {}",
-                        msg.layer_prefix.unwrap_or("unknown"),
-                        ty,
-                        severity,
-                        msg.description
-                    );
-                }))
+                        if message_severity.intersects(DebugUtilsMessageSeverity::VERBOSE)
+                            || message_severity.intersects(DebugUtilsMessageSeverity::INFO)
+                        {
+                            return;
+                        }
+
+                        println!(
+                            "{} {} {}: {}",
+                            callback_data.message_id_name.unwrap_or("unknown"),
+                            ty,
+                            severity,
+                            callback_data.message
+                        );
+                    },
+                ))
             },
         )
-            .ok()
+        .ok()
     };
 
     debug_callback
@@ -213,9 +222,6 @@ fn create_logical_device(
     let (device, mut queues) = Device::new(
         physical_device.clone(),
         DeviceCreateInfo {
-            enabled_features: Features {
-                ..Default::default()
-            },
             enabled_extensions: *device_extensions,
             queue_create_infos: vec![QueueCreateInfo {
                 queue_family_index,
@@ -224,7 +230,7 @@ fn create_logical_device(
             ..Default::default()
         },
     )
-        .expect("could not create logical device");
+    .expect("could not create logical device");
 
     let graphics_queue = queues.next().expect("could not fetch queue");
 

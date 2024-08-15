@@ -1,20 +1,25 @@
 use crate::context::Context;
-use crate::custom_storage_image::CustomStorageImage;
 use std::sync::Arc;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage, CopyImageInfo,
+    CommandBufferBeginInfo, CommandBufferExecFuture, CommandBufferLevel, CommandBufferUsage,
+    CopyImageInfo, RecordingCommandBuffer,
 };
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
-use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::image::sampler::{
+    Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode,
+};
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
 use vulkano::image::{
-    AttachmentImage, ImageAccess, ImageCreateFlags, ImageSubresourceRange, ImageUsage,
-    ImageViewAbstract,
+    mip_level_extent, Image, ImageCreateInfo, ImageSubresourceRange, ImageType, ImageUsage,
 };
-use vulkano::memory::allocator::StandardMemoryAllocator;
-use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint};
-use vulkano::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::pipeline::compute::ComputePipelineCreateInfo;
+use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
+use vulkano::pipeline::{
+    ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo,
+};
 use vulkano::sync::GpuFuture;
 
 pub struct BloomRenderer {
@@ -23,8 +28,8 @@ pub struct BloomRenderer {
 
     sampler: Arc<Sampler>,
 
-    input_images: Vec<Arc<ImageView<AttachmentImage>>>,
-    output_images: Vec<Arc<ImageView<CustomStorageImage>>>,
+    input_images: Vec<Arc<ImageView>>,
+    output_images: Vec<Arc<ImageView>>,
 
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
@@ -34,33 +39,53 @@ pub struct BloomRenderer {
 impl BloomRenderer {
     pub fn new(
         context: &Context,
-        input_images: Vec<Arc<ImageView<AttachmentImage>>>,
+        input_images: Vec<Arc<ImageView>>,
         memory_allocator: Arc<StandardMemoryAllocator>,
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
         descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     ) -> BloomRenderer {
         let downsample_pipeline = {
-            let shader = cs::downsample::load(context.device()).unwrap();
+            let shader = cs::downsample::load(context.device())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+
+            let stage = PipelineShaderStageCreateInfo::new(shader);
+            let layout = PipelineLayout::new(
+                context.device(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+                    .into_pipeline_layout_create_info(context.device())
+                    .unwrap(),
+            )
+            .unwrap();
 
             ComputePipeline::new(
                 context.device(),
-                shader.entry_point("main").unwrap(),
-                &(),
                 None,
-                |_| {},
+                ComputePipelineCreateInfo::stage_layout(stage, layout),
             )
             .unwrap()
         };
 
         let upsample_pipeline = {
-            let shader = cs::upsample::load(context.device()).unwrap();
+            let shader = cs::upsample::load(context.device())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+
+            let stage = PipelineShaderStageCreateInfo::new(shader);
+            let layout = PipelineLayout::new(
+                context.device(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+                    .into_pipeline_layout_create_info(context.device())
+                    .unwrap(),
+            )
+            .unwrap();
 
             ComputePipeline::new(
                 context.device(),
-                shader.entry_point("main").unwrap(),
-                &(),
                 None,
-                |_| {},
+                ComputePipelineCreateInfo::stage_layout(stage, layout),
             )
             .unwrap()
         };
@@ -93,7 +118,7 @@ impl BloomRenderer {
         }
     }
 
-    pub fn resize(&mut self, input_images: Vec<Arc<ImageView<AttachmentImage>>>) {
+    pub fn resize(&mut self, input_images: Vec<Arc<ImageView>>) {
         self.input_images = input_images.clone();
         self.output_images = create_output_images(input_images, self.memory_allocator.clone())
     }
@@ -107,10 +132,14 @@ impl BloomRenderer {
     where
         F: GpuFuture + 'static,
     {
-        let mut builder = AutoCommandBufferBuilder::primary(
-            &self.command_buffer_allocator,
+        let mut builder = RecordingCommandBuffer::new(
+            self.command_buffer_allocator.clone(),
             context.queue().queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
+            CommandBufferLevel::Primary,
+            CommandBufferBeginInfo {
+                usage: CommandBufferUsage::OneTimeSubmit,
+                ..Default::default()
+            },
         )
         .unwrap();
 
@@ -130,7 +159,9 @@ impl BloomRenderer {
             .unwrap();
 
         // downsample passes
-        builder.bind_pipeline_compute(self.downsample_pipeline.clone());
+        builder
+            .bind_pipeline_compute(self.downsample_pipeline.clone())
+            .unwrap();
 
         let downsample_set_layout = self
             .downsample_pipeline
@@ -143,19 +174,14 @@ impl BloomRenderer {
             let input_miplevel = i;
             let output_miplevel = i + 1;
 
-            let input_size = work_image
-                .dimensions()
-                .mip_level_dimensions(input_miplevel)
-                .unwrap();
-            let output_size = work_image
-                .dimensions()
-                .mip_level_dimensions(output_miplevel)
-                .unwrap();
+            let input_size = mip_level_extent(work_image.extent(), input_miplevel).unwrap();
+
+            let output_size = mip_level_extent(work_image.extent(), output_miplevel).unwrap();
 
             let output_image_view = ImageView::new(
                 work_image.clone(),
                 ImageViewCreateInfo {
-                    format: Some(work_image.format()),
+                    format: work_image.format(),
                     subresource_range: ImageSubresourceRange {
                         mip_levels: (output_miplevel)..(output_miplevel + 1), // mip level of output image
                         ..work_image.subresource_range()
@@ -168,7 +194,7 @@ impl BloomRenderer {
             let input_image_view = ImageView::new(
                 work_image.clone(),
                 ImageViewCreateInfo {
-                    format: Some(work_image.format()),
+                    format: work_image.format(),
                     subresource_range: ImageSubresourceRange {
                         mip_levels: (input_miplevel)..(input_miplevel + 1), // mip level of output image
                         ..work_image.subresource_range()
@@ -178,8 +204,8 @@ impl BloomRenderer {
             )
             .unwrap();
 
-            let downsample_descriptor_set = PersistentDescriptorSet::new(
-                &self.descriptor_set_allocator,
+            let downsample_descriptor_set = DescriptorSet::new(
+                self.descriptor_set_allocator.clone(),
                 downsample_set_layout.clone(),
                 [
                     WriteDescriptorSet::image_view_sampler(
@@ -189,12 +215,12 @@ impl BloomRenderer {
                     ),
                     WriteDescriptorSet::image_view(1, output_image_view.clone()),
                 ],
+                [],
             )
             .unwrap();
 
             let downsample_pass = cs::downsample::Pass {
-                texelSize: input_size.width_height().map(|v| 1.0 / (v as f32)).into(),
-
+                texelSize: [1.0 / input_size[0] as f32, 1.0 / input_size[1] as f32],
                 useThreshold: (input_miplevel == 0) as u32,
                 threshold: 1.5,
                 knee: 0.1,
@@ -206,19 +232,26 @@ impl BloomRenderer {
                     0,
                     downsample_pass,
                 )
+                .unwrap()
                 .bind_descriptor_sets(
                     PipelineBindPoint::Compute,
                     self.downsample_pipeline.layout().clone(),
                     0,
                     downsample_descriptor_set.clone(),
                 )
-                .dispatch(output_size.width_height_depth())
                 .unwrap();
+
+            unsafe {
+                // TODO: check if valid
+                builder.dispatch(output_size).unwrap();
+            }
         }
 
         // upsample passes
 
-        builder.bind_pipeline_compute(self.upsample_pipeline.clone());
+        builder
+            .bind_pipeline_compute(self.upsample_pipeline.clone())
+            .unwrap();
 
         let upsample_set_layout = self
             .upsample_pipeline
@@ -231,19 +264,14 @@ impl BloomRenderer {
             let input_miplevel = i + 1;
             let output_miplevel = i;
 
-            let input_size = work_image
-                .dimensions()
-                .mip_level_dimensions(input_miplevel)
-                .unwrap();
-            let output_size = work_image
-                .dimensions()
-                .mip_level_dimensions(output_miplevel)
-                .unwrap();
+            let input_size = mip_level_extent(work_image.extent(), input_miplevel).unwrap();
+
+            let output_size = mip_level_extent(work_image.extent(), output_miplevel).unwrap();
 
             let output_image_view = ImageView::new(
                 work_image.clone(),
                 ImageViewCreateInfo {
-                    format: Some(work_image.format()),
+                    format: work_image.format(),
                     subresource_range: ImageSubresourceRange {
                         mip_levels: (output_miplevel)..(output_miplevel + 1), // mip level of output image
                         ..work_image.subresource_range()
@@ -256,7 +284,7 @@ impl BloomRenderer {
             let input_image_view = ImageView::new(
                 work_image.clone(),
                 ImageViewCreateInfo {
-                    format: Some(work_image.format()),
+                    format: work_image.format(),
                     subresource_range: ImageSubresourceRange {
                         mip_levels: (input_miplevel)..(input_miplevel + 1), // mip level of output image
                         ..work_image.subresource_range()
@@ -266,8 +294,8 @@ impl BloomRenderer {
             )
             .unwrap();
 
-            let upsample_descriptor_set = PersistentDescriptorSet::new(
-                &self.descriptor_set_allocator,
+            let upsample_descriptor_set = DescriptorSet::new(
+                self.descriptor_set_allocator.clone(),
                 upsample_set_layout.clone(),
                 [
                     WriteDescriptorSet::image_view_sampler(
@@ -277,59 +305,73 @@ impl BloomRenderer {
                     ),
                     WriteDescriptorSet::image_view(1, output_image_view.clone()),
                 ],
+                [],
             )
             .unwrap();
 
             let upsample_pass = cs::upsample::Pass {
-                texelSize: input_size.width_height().map(|v| 1.0 / (v as f32)).into(),
+                texelSize: [1.0 / input_size[0] as f32, 1.0 / input_size[1] as f32],
 
                 intensity: 1.0,
             };
 
             builder
                 .push_constants(self.upsample_pipeline.layout().clone(), 0, upsample_pass)
+                .unwrap()
                 .bind_descriptor_sets(
                     PipelineBindPoint::Compute,
                     self.upsample_pipeline.layout().clone(),
                     0,
                     upsample_descriptor_set.clone(),
                 )
-                .dispatch(output_size.width_height_depth())
                 .unwrap();
+
+            unsafe {
+                // TODO: check if valid
+                builder.dispatch(output_size).unwrap();
+            }
         }
-        let command_buffer = builder.build().unwrap();
+        let command_buffer = builder.end().unwrap();
 
         future
             .then_execute(context.queue(), command_buffer)
             .unwrap()
     }
 
-    pub fn output_images(&self) -> &Vec<Arc<ImageView<CustomStorageImage>>> {
+    pub fn output_images(&self) -> &Vec<Arc<ImageView>> {
         &self.output_images
     }
 }
 
 fn create_output_images(
-    input_images: Vec<Arc<ImageView<AttachmentImage>>>,
+    input_images: Vec<Arc<ImageView>>,
     memory_allocator: Arc<StandardMemoryAllocator>,
-) -> Vec<Arc<ImageView<CustomStorageImage>>> {
+) -> Vec<Arc<ImageView>> {
     input_images
         .iter()
         .map(|image| {
-            let storage_image = CustomStorageImage::uninitialized(
-                &memory_allocator,
-                image.dimensions().width_height(),
-                image.image().format(),
-                6,
-                ImageUsage::TRANSFER_DST | ImageUsage::STORAGE | ImageUsage::SAMPLED,
-                ImageCreateFlags::empty(),
+            let storage_image = Image::new(
+                memory_allocator.clone(),
+                ImageCreateInfo {
+                    image_type: ImageType::Dim2d,
+                    format: image.format(),
+                    extent: image.image().extent(),
+                    mip_levels: 6,
+                    usage: ImageUsage::TRANSFER_DST | ImageUsage::STORAGE | ImageUsage::SAMPLED,
+                    ..ImageCreateInfo::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                    ..Default::default()
+                },
             )
             .unwrap();
 
             let view = ImageView::new(
                 storage_image.clone(),
                 ImageViewCreateInfo {
-                    format: Some(storage_image.format()),
+                    format: storage_image.format(),
                     subresource_range: ImageSubresourceRange {
                         mip_levels: 0..1,
                         ..storage_image.subresource_range()

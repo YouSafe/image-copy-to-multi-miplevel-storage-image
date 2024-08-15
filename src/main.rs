@@ -12,19 +12,16 @@ use std::sync::Arc;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::format::Format;
 use vulkano::image::view::ImageView;
-use vulkano::image::SwapchainImage;
 use vulkano::swapchain::{ColorSpace, SurfaceInfo};
 use vulkano::{
     command_buffer::allocator::StandardCommandBufferAllocator,
-    image::{ImageAccess, ImageUsage},
+    image::ImageUsage,
     memory::allocator::StandardMemoryAllocator,
     pipeline::graphics::viewport::Viewport,
-    swapchain::{
-        acquire_next_image, AcquireError, Swapchain, SwapchainCreateInfo, SwapchainCreationError,
-        SwapchainPresentInfo,
-    },
-    sync::{self, FlushError, GpuFuture},
+    swapchain::{acquire_next_image, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
+    sync::{self, GpuFuture},
 };
+use vulkano::{Validated, VulkanError};
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -32,10 +29,12 @@ use winit::{
 };
 
 fn main() {
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoop::new().unwrap();
     let window_builder = WindowBuilder::new();
 
-    let context = Context::new(window_builder, &event_loop);
+    let window = Arc::new(window_builder.build(&event_loop).unwrap());
+
+    let context = Context::new(window.clone(), &event_loop);
 
     let surface = context.surface();
     let device = context.device();
@@ -72,8 +71,8 @@ fn main() {
                 })
                 .expect("could not fetch image format")
                 .0, // just the format
-        );
-        let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
+        )
+        .unwrap();
 
         Swapchain::new(
             device.clone(),
@@ -94,7 +93,7 @@ fn main() {
         .unwrap()
     };
 
-    let swapchain_image_views: Vec<Arc<ImageView<SwapchainImage>>> = images
+    let swapchain_image_views: Vec<Arc<ImageView>> = images
         .iter()
         .map(|image| ImageView::new_default(image.clone()).unwrap())
         .collect();
@@ -106,14 +105,17 @@ fn main() {
         Default::default(),
     ));
 
-    let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(context.device()));
+    let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
+        context.device(),
+        Default::default(),
+    ));
 
     // Dynamic viewports allow us to recreate just the viewport when the window is resized
     // Otherwise we would have to recreate the whole pipeline.
     let mut viewport = Viewport {
-        origin: [0.0, 0.0],
-        dimensions: [0.0, 0.0],
-        depth_range: 0.0..1.0,
+        offset: [0.0, 0.0],
+        extent: [0.0, 0.0],
+        depth_range: 0.0..=1.0,
     };
 
     let mut scene_renderer = SceneRenderer::new(
@@ -146,108 +148,117 @@ fn main() {
     let mut recreate_swapchain = false;
     let mut previous_frame_end = Some(sync::now(device.clone()).boxed());
 
-    event_loop.run(move |event, _, control_flow| {
-        match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => {
-                *control_flow = ControlFlow::Exit;
-            }
-            Event::WindowEvent {
-                event: WindowEvent::Resized(_),
-                ..
-            } => {
-                recreate_swapchain = true;
-            }
-            Event::RedrawEventsCleared => {
-                let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
-                let dimensions = window.inner_size();
-                if dimensions.width == 0 || dimensions.height == 0 {
-                    return;
+    event_loop.set_control_flow(ControlFlow::Poll);
+
+    event_loop
+        .run(move |event, elwt| {
+            match event {
+                Event::WindowEvent {
+                    event: WindowEvent::CloseRequested,
+                    ..
+                } => {
+                    elwt.exit();
                 }
-
-                // It is important to call this function from time to time, otherwise resources will keep
-                // accumulating and you will eventually reach an out of memory error.
-                // Calling this function polls various fences in order to determine what the GPU has
-                // already processed, and frees the resources that are no longer needed.
-                previous_frame_end.as_mut().unwrap().cleanup_finished();
-
-                if recreate_swapchain {
-                    let (new_swapchain, new_images) =
-                        match swapchain.recreate(SwapchainCreateInfo {
-                            image_extent: dimensions.into(),
-                            ..swapchain.create_info()
-                        }) {
-                            Ok(r) => r,
-                            // This error tends to happen when the user is manually resizing the window.
-                            // Simply restarting the loop is the easiest way to fix this issue.
-                            Err(SwapchainCreationError::ImageExtentNotSupported { .. }) => return,
-                            Err(e) => panic!("Failed to recreate swapchain: {:?}", e),
-                        };
-
-                    let dimensions = new_images[0].dimensions().width_height();
-                    viewport.dimensions = [dimensions[0] as f32, dimensions[1] as f32];
-
-                    let new_swapchain_image_views: Vec<Arc<ImageView<SwapchainImage>>> = new_images
-                        .iter()
-                        .map(|image| ImageView::new_default(image.clone()).unwrap())
-                        .collect();
-
-                    swapchain = new_swapchain;
-                    scene_renderer.resize(swapchain.image_count(), swapchain.image_extent());
-                    bloom_renderer.resize(scene_renderer.output_images().clone());
-                    quad_renderer
-                        .resize(bloom_renderer.output_images(), &new_swapchain_image_views);
-
-                    recreate_swapchain = false;
+                Event::WindowEvent {
+                    event: WindowEvent::Resized(_),
+                    ..
+                } => {
+                    recreate_swapchain = true;
                 }
+                Event::WindowEvent {
+                    event: WindowEvent::RedrawRequested,
+                    ..
+                } => {
+                    let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
+                    let dimensions = window.inner_size();
+                    if dimensions.width == 0 || dimensions.height == 0 {
+                        return;
+                    }
 
-                let (image_index, suboptimal, acquire_future) =
-                    match acquire_next_image(swapchain.clone(), None) {
+                    // It is important to call this function from time to time, otherwise resources will keep
+                    // accumulating and you will eventually reach an out of memory error.
+                    // Calling this function polls various fences in order to determine what the GPU has
+                    // already processed, and frees the resources that are no longer needed.
+                    previous_frame_end.as_mut().unwrap().cleanup_finished();
+
+                    if recreate_swapchain {
+                        let (new_swapchain, new_images) = swapchain
+                            .recreate(SwapchainCreateInfo {
+                                image_extent: dimensions.into(),
+                                ..swapchain.create_info()
+                            })
+                            .unwrap();
+
+                        let image_extent: [u32; 2] = window.inner_size().into();
+                        viewport.extent = [image_extent[0] as f32, image_extent[1] as f32];
+
+                        let new_swapchain_image_views: Vec<Arc<ImageView>> = new_images
+                            .iter()
+                            .map(|image| ImageView::new_default(image.clone()).unwrap())
+                            .collect();
+
+                        swapchain = new_swapchain;
+                        scene_renderer.resize(swapchain.image_count(), swapchain.image_extent());
+                        bloom_renderer.resize(scene_renderer.output_images().clone());
+                        quad_renderer
+                            .resize(bloom_renderer.output_images(), &new_swapchain_image_views);
+
+                        recreate_swapchain = false;
+                    }
+
+                    let (image_index, suboptimal, acquire_future) = match acquire_next_image(
+                        swapchain.clone(),
+                        None,
+                    )
+                    .map_err(Validated::unwrap)
+                    {
                         Ok(r) => r,
-                        Err(AcquireError::OutOfDate) => {
+                        Err(VulkanError::OutOfDate) => {
                             recreate_swapchain = true;
                             return;
                         }
                         Err(e) => panic!("Failed to acquire next image: {:?}", e),
                     };
 
-                // acquire_next_image can be successful, but suboptimal. This means that the swapchain image
-                // will still work, but it may not display correctly. With some drivers this can be when
-                // the window resizes, but it may not cause the swapchain to become out of date.
-                if suboptimal {
-                    recreate_swapchain = true;
-                }
-
-                let future = previous_frame_end.take().unwrap().join(acquire_future);
-
-                let future = scene_renderer.render(&context, future, image_index, &viewport);
-                let future = bloom_renderer.compute(&context, future, image_index);
-                let future = quad_renderer.render(&context, future, image_index, &viewport);
-
-                let future = future
-                    .then_swapchain_present(
-                        queue.clone(),
-                        SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_index),
-                    )
-                    .then_signal_fence_and_flush();
-
-                match future {
-                    Ok(future) => {
-                        previous_frame_end = Some(future.boxed());
-                    }
-                    Err(FlushError::OutOfDate) => {
+                    // acquire_next_image can be successful, but suboptimal. This means that the swapchain image
+                    // will still work, but it may not display correctly. With some drivers this can be when
+                    // the window resizes, but it may not cause the swapchain to become out of date.
+                    if suboptimal {
                         recreate_swapchain = true;
-                        previous_frame_end = Some(sync::now(device.clone()).boxed());
                     }
-                    Err(e) => {
-                        panic!("Failed to flush future: {:?}", e);
-                        // previous_frame_end = Some(sync::now(device.clone()).boxed());
+
+                    let future = previous_frame_end.take().unwrap().join(acquire_future);
+
+                    let future = scene_renderer.render(&context, future, image_index, &viewport);
+                    let future = bloom_renderer.compute(&context, future, image_index);
+                    let future = quad_renderer.render(&context, future, image_index, &viewport);
+
+                    let future = future
+                        .then_swapchain_present(
+                            queue.clone(),
+                            SwapchainPresentInfo::swapchain_image_index(
+                                swapchain.clone(),
+                                image_index,
+                            ),
+                        )
+                        .then_signal_fence_and_flush();
+
+                    match future.map_err(Validated::unwrap) {
+                        Ok(future) => {
+                            previous_frame_end = Some(future.boxed());
+                        }
+                        Err(VulkanError::OutOfDate) => {
+                            recreate_swapchain = true;
+                            previous_frame_end = Some(sync::now(device.clone()).boxed());
+                        }
+                        Err(e) => {
+                            panic!("Failed to flush future: {:?}", e);
+                            // previous_frame_end = Some(sync::now(device.clone()).boxed());
+                        }
                     }
                 }
+                _ => (),
             }
-            _ => (),
-        }
-    });
+        })
+        .unwrap();
 }
