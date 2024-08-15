@@ -1,6 +1,5 @@
 mod bloom_renderer;
 mod context;
-mod custom_storage_image;
 mod quad_renderer;
 mod scene_renderer;
 
