@@ -14,7 +14,7 @@ use vulkano::image::view::{ImageView, ImageViewCreateInfo};
 use vulkano::image::{
     mip_level_extent, Image, ImageCreateInfo, ImageSubresourceRange, ImageType, ImageUsage,
 };
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator};
 use vulkano::pipeline::compute::ComputePipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{
@@ -360,11 +360,7 @@ fn create_output_images(
                     usage: ImageUsage::TRANSFER_DST | ImageUsage::STORAGE | ImageUsage::SAMPLED,
                     ..ImageCreateInfo::default()
                 },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                    ..Default::default()
-                },
+                AllocationCreateInfo::default(),
             )
             .unwrap();
 

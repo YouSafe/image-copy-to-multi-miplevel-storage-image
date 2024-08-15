@@ -244,11 +244,7 @@ fn create_output_images(
                             | ImageUsage::STORAGE,
                         ..Default::default()
                     },
-                    AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                            | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                        ..Default::default()
-                    },
+                    AllocationCreateInfo::default(),
                 )
                 .unwrap(),
             )
