@@ -3,11 +3,7 @@ use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{
     Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
 };
-use vulkano::instance::debug::{
-    DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger,
-    DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo,
-};
-use vulkano::instance::{Instance, InstanceCreateInfo, InstanceExtensions};
+use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::swapchain::Surface;
 use vulkano::{Version, VulkanLibrary};
 use winit::event_loop::EventLoop;
@@ -18,12 +14,11 @@ pub struct Context {
     device: Arc<Device>,
     physical_device: Arc<PhysicalDevice>,
     queue: Arc<Queue>,
-    _debug_callback: Option<DebugUtilsMessenger>,
 }
 
 impl Context {
     pub fn new(window: Arc<Window>, event_loop: &EventLoop<()>) -> Context {
-        let (instance, debug_callback) = create_instance(event_loop);
+        let instance = create_instance(event_loop);
 
         let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
@@ -46,7 +41,6 @@ impl Context {
             device,
             physical_device,
             queue,
-            _debug_callback: debug_callback,
         }
     }
 
@@ -67,114 +61,22 @@ impl Context {
     }
 }
 
-fn create_instance(event_loop: &EventLoop<()>) -> (Arc<Instance>, Option<DebugUtilsMessenger>) {
+fn create_instance(event_loop: &EventLoop<()>) -> Arc<Instance> {
     let library = VulkanLibrary::new().expect("no local Vulkan library/DLL");
 
-    let supported_extensions = library.supported_extensions();
-    let supported_layers: Vec<_> = library
-        .layer_properties()
-        .expect("could not enumerate layers")
-        .collect();
-
-    // enable debugging if available
-    let debug_extension_name = String::from("VK_LAYER_KHRONOS_validation");
-    let debug_enabled = supported_extensions.ext_debug_utils
-        && supported_layers
-            .iter()
-            .any(|l| l.name() == debug_extension_name);
-
     let required_extensions = Surface::required_extensions(&event_loop).unwrap();
-
-    let instance_extensions = InstanceExtensions {
-        ext_debug_utils: debug_enabled,
-        ..required_extensions
-    };
-
-    let mut layers = vec![];
-    if debug_enabled {
-        layers.push(debug_extension_name);
-    }
 
     let instance = Instance::new(
         library,
         InstanceCreateInfo {
-            enabled_extensions: instance_extensions,
-            enabled_layers: layers,
+            enabled_extensions: required_extensions,
             max_api_version: Some(Version::major_minor(1, 2)),
             ..Default::default()
         },
     )
     .expect("failed to create instance");
 
-    // the debug callback should stay alive as long as the instance
-    // otherwise the callback will be dropped and no longer print any messages
-    let debug_callback = if debug_enabled {
-        create_debug_callback(instance.clone())
-    } else {
-        None
-    };
-    (instance, debug_callback)
-}
-
-fn create_debug_callback(instance: Arc<Instance>) -> Option<DebugUtilsMessenger> {
-    let debug_callback = unsafe {
-        DebugUtilsMessenger::new(
-            instance.clone(),
-            DebugUtilsMessengerCreateInfo {
-                message_severity: DebugUtilsMessageSeverity::ERROR
-                    | DebugUtilsMessageSeverity::WARNING
-                    | DebugUtilsMessageSeverity::INFO
-                    | DebugUtilsMessageSeverity::VERBOSE,
-                message_type: DebugUtilsMessageType::GENERAL
-                    | DebugUtilsMessageType::VALIDATION
-                    | DebugUtilsMessageType::PERFORMANCE,
-                ..DebugUtilsMessengerCreateInfo::user_callback(DebugUtilsMessengerCallback::new(
-                    |message_severity, message_type, callback_data| {
-                        let severity = if message_severity
-                            .intersects(DebugUtilsMessageSeverity::ERROR)
-                        {
-                            "error"
-                        } else if message_severity.intersects(DebugUtilsMessageSeverity::WARNING) {
-                            "warning"
-                        } else if message_severity.intersects(DebugUtilsMessageSeverity::INFO) {
-                            "information"
-                        } else if message_severity.intersects(DebugUtilsMessageSeverity::VERBOSE) {
-                            "verbose"
-                        } else {
-                            panic!("no-impl");
-                        };
-
-                        let ty = if message_type.intersects(DebugUtilsMessageType::GENERAL) {
-                            "general"
-                        } else if message_type.intersects(DebugUtilsMessageType::VALIDATION) {
-                            "validation"
-                        } else if message_type.intersects(DebugUtilsMessageType::PERFORMANCE) {
-                            "performance"
-                        } else {
-                            panic!("no-impl");
-                        };
-
-                        if message_severity.intersects(DebugUtilsMessageSeverity::VERBOSE)
-                            || message_severity.intersects(DebugUtilsMessageSeverity::INFO)
-                        {
-                            return;
-                        }
-
-                        println!(
-                            "{} {} {}: {}",
-                            callback_data.message_id_name.unwrap_or("unknown"),
-                            ty,
-                            severity,
-                            callback_data.message
-                        );
-                    },
-                ))
-            },
-        )
-        .ok()
-    };
-
-    debug_callback
+    instance
 }
 
 fn find_physical_device(
