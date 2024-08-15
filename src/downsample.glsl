@@ -20,8 +20,16 @@ vec3 textureSample(vec2 uv, vec2 offset) {
     return textureLod(inputImage, uv + offset * pass.texelSize, 0.0).rgb;
 }
 
+float luminance(vec3 color) {
+    return dot(color, vec3(0.2126f, 0.7152f, 0.0722f));
+}
+
+float karisAvg(vec3 color) {
+    return 1.0 / (1.0 + luminance(color));
+}
+
 // Using the technique from https://catlikecoding.com/unity/tutorials/advanced-rendering/bloom/
-vec3 soft_threshold(vec3 color, float threshold, float knee) {
+vec3 softThreshold(vec3 color, float threshold, float knee) {
     // use color's maximum component to determine brightness
     float brightness = max(color.r, max(color.g, color.b));
 
@@ -93,7 +101,7 @@ void main() {
     downsample = max(downsample, 0.0001f);
 
     if (pass.useThreshold) {
-        downsample = soft_threshold(downsample, pass.threshold, pass.knee);
+        downsample = softThreshold(downsample, pass.threshold, pass.knee);
     }
 
     imageStore(outputImage, texel_output, vec4(downsample, 1.0));

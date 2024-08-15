@@ -13,7 +13,6 @@ use vulkano::image::{
     ImageViewAbstract,
 };
 use vulkano::memory::allocator::StandardMemoryAllocator;
-use vulkano::padded::Padded;
 use vulkano::pipeline::{ComputePipeline, Pipeline, PipelineBindPoint};
 use vulkano::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode};
 use vulkano::sync::GpuFuture;
